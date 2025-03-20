@@ -1,0 +1,436 @@
+const fs = require('fs');
+const path = require('path');
+const axios = require('axios');
+
+// TestRail API Client using axios
+class TestRailClient {
+  constructor(options) {
+    this.host = options.host;
+    this.user = options.user;
+    this.password = options.password;
+    this.baseUrl = `${this.host}/index.php?/api/v2/`;
+    
+    // Configure axios instance
+    this.api = axios.create({
+      auth: {
+        username: this.user,
+        password: this.password
+      },
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      }
+    });
+  }
+
+  async get(endpoint, queryParams = {}) {
+    try {
+      const response = await this.api.get(`${this.baseUrl}${endpoint}`, { params: queryParams });
+      return response.data;
+    } catch (error) {
+      console.error(`Error in GET ${endpoint}:`, error.message);
+      if (error.response) {
+        console.error('Response status:', error.response.status);
+        console.error('Response data:', error.response.data);
+      }
+      throw error;
+    }
+  }
+
+  async post(endpoint, data = {}) {
+    try {
+      const response = await this.api.post(`${this.baseUrl}${endpoint}`, data);
+      return response.data;
+    } catch (error) {
+      console.error(`Error in POST ${endpoint}:`, error.message);
+      if (error.response) {
+        console.error('Response status:', error.response.status);
+        console.error('Response data:', error.response.data);
+      }
+      throw error;
+    }
+  }
+
+  // API Endpoints
+  
+  // Projects
+  getProjects() {
+    return this.get('get_projects');
+  }
+  
+  getProject(id) {
+    return this.get(`get_project/${id}`);
+  }
+  
+  // Cases
+  getCases(projectId, filters = {}) {
+    return this.get(`get_cases/${projectId}`, filters);
+  }
+  
+  // Case Fields
+  getCaseFields() {
+    return this.get('get_case_fields');
+  }
+  
+  // Case Types
+  getCaseTypes() {
+    return this.get('get_case_types');
+  }
+  
+  // Suites
+  getSuites(projectId) {
+    return this.get(`get_suites/${projectId}`);
+  }
+  
+  // Sections
+  getSections(projectId, filters = {}) {
+    return this.get(`get_sections/${projectId}`, filters);
+  }
+  
+  // Runs
+  getRuns(projectId, filters = {}) {
+    return this.get(`get_runs/${projectId}`, filters);
+  }
+  
+  // Tests
+  getTests(runId, filters = {}) {
+    return this.get(`get_tests/${runId}`, filters);
+  }
+  
+  // Results
+  getResultsForRun(runId, filters = {}) {
+    return this.get(`get_results_for_run/${runId}`, filters);
+  }
+  
+  // Milestones
+  getMilestones(projectId, filters = {}) {
+    return this.get(`get_milestones/${projectId}`, filters);
+  }
+  
+  // Plans
+  getPlans(projectId, filters = {}) {
+    return this.get(`get_plans/${projectId}`, filters);
+  }
+  
+  getPlan(planId) {
+    return this.get(`get_plan/${planId}`);
+  }
+  
+  // Configs (Configuration Groups)
+  getConfigs(projectId) {
+    return this.get(`get_configs/${projectId}`);
+  }
+  
+  // Templates
+  getTemplates(projectId) {
+    return this.get(`get_templates/${projectId}`);
+  }
+  
+  // Users
+  getUsers() {
+    return this.get('get_users');
+  }
+  
+  // Priorities
+  getPriorities() {
+    return this.get('get_priorities');
+  }
+  
+  // Statuses
+  getStatuses() {
+    return this.get('get_statuses');
+  }
+  
+  // Result Fields
+  getResultFields() {
+    return this.get('get_result_fields');
+  }
+}
+
+// Export all TestRail data to a single JSON file
+async function exportAllTestRailDataToSingleFile() {
+  // TestRail API Configuration
+  const testRail = new TestRailClient({
+    host: 'https://your-instance.testrail.io', // Replace with your TestRail host
+    user: 'your-email@example.com',           // Replace with your email
+    password: 'your-api-key'                  // Replace with your API key
+  });
+  
+  console.log('Starting TestRail data export to single file...');
+  
+  // Data structure to hold all the exported data
+  const exportData = {
+    global: {},
+    projects: []
+  };
+  
+  try {
+    // Export global data
+    console.log('Exporting global data...');
+    
+    // Get all case fields
+    exportData.global.caseFields = await testRail.getCaseFields();
+    console.log('Exported case fields');
+    
+    // Get all case types
+    exportData.global.caseTypes = await testRail.getCaseTypes();
+    console.log('Exported case types');
+    
+    // Get all priorities
+    exportData.global.priorities = await testRail.getPriorities();
+    console.log('Exported priorities');
+    
+    // Get all statuses
+    exportData.global.statuses = await testRail.getStatuses();
+    console.log('Exported statuses');
+    
+    // Get all result fields
+    exportData.global.resultFields = await testRail.getResultFields();
+    console.log('Exported result fields');
+    
+    // Get all users
+    exportData.global.users = await testRail.getUsers();
+    console.log('Exported users');
+    
+    // Get all projects
+    const projects = await testRail.getProjects();
+    console.log(`Found ${projects.length} projects. Exporting data for each...`);
+    
+    // Process each project
+    for (const project of projects) {
+      console.log(`Processing project: ${project.name} (ID: ${project.id})`);
+      
+      const projectData = {
+        info: project,
+        data: {}
+      };
+      
+      try {
+        // Get and export suites
+        projectData.data.suites = await testRail.getSuites(project.id);
+        console.log(`Exported suites for project ${project.name}`);
+        
+        // Get and export milestones
+        projectData.data.milestones = await testRail.getMilestones(project.id);
+        console.log(`Exported milestones for project ${project.name}`);
+        
+        // Get and export plans
+        const plans = await testRail.getPlans(project.id);
+        projectData.data.plans = plans;
+        console.log(`Exported plans for project ${project.name}`);
+        
+        // For each plan, export plan details
+        projectData.data.planDetails = [];
+        for (const plan of plans) {
+          try {
+            const planDetail = await testRail.getPlan(plan.id);
+            projectData.data.planDetails.push({
+              id: plan.id,
+              details: planDetail
+            });
+          } catch (planError) {
+            console.error(`Error getting details for plan ${plan.id}:`, planError.message);
+            projectData.data.planDetails.push({
+              id: plan.id,
+              error: planError.message
+            });
+          }
+        }
+        console.log(`Exported plan details for project ${project.name}`);
+        
+        // Get and export configuration groups
+        projectData.data.configs = await testRail.getConfigs(project.id);
+        console.log(`Exported configuration groups for project ${project.name}`);
+        
+        // Get and export runs
+        const runs = await testRail.getRuns(project.id);
+        projectData.data.runs = runs;
+        console.log(`Exported runs for project ${project.name}`);
+        
+        // For each run, export tests and results
+        projectData.data.runDetails = [];
+        for (const run of runs) {
+          try {
+            const tests = await testRail.getTests(run.id);
+            const results = await testRail.getResultsForRun(run.id);
+            
+            projectData.data.runDetails.push({
+              id: run.id,
+              tests: tests,
+              results: results
+            });
+          } catch (runError) {
+            console.error(`Error getting details for run ${run.id}:`, runError.message);
+            projectData.data.runDetails.push({
+              id: run.id,
+              error: runError.message
+            });
+          }
+        }
+        console.log(`Exported run details for project ${project.name}`);
+        
+        // Get and export sections
+        projectData.data.sections = await testRail.getSections(project.id);
+        console.log(`Exported sections for project ${project.name}`);
+        
+        // Get and export cases
+        projectData.data.cases = await testRail.getCases(project.id);
+        console.log(`Exported cases for project ${project.name}`);
+        
+        // Get and export templates
+        projectData.data.templates = await testRail.getTemplates(project.id);
+        console.log(`Exported templates for project ${project.name}`);
+        
+      } catch (projectError) {
+        console.error(`Error exporting data for project ${project.name}:`, projectError.message);
+        projectData.error = projectError.message;
+      }
+      
+      // Add project data to the main data structure
+      exportData.projects.push(projectData);
+    }
+    
+    // Save all data to a single JSON file
+    const outputPath = './testrail-export-all.json';
+    fs.writeFileSync(outputPath, JSON.stringify(exportData, null, 2), 'utf8');
+    console.log(`Export completed successfully! All data saved to: ${outputPath}`);
+    
+    return exportData; // Return the data for summary reporting
+  } catch (error) {
+    console.error('Error during export:', error.message);
+    return null;
+  }
+}
+
+// Generate and print summary report
+function generateSummaryReport(exportData) {
+  console.log('\n==========================================');
+  console.log('          EXPORT SUMMARY REPORT          ');
+  console.log('==========================================\n');
+  
+  // Global data summary
+  console.log('GLOBAL DATA:');
+  console.log('------------');
+  console.log(`Case Fields: ${exportData.global.caseFields?.length || 0} items`);
+  console.log(`Case Types: ${exportData.global.caseTypes?.length || 0} items`);
+  console.log(`Priorities: ${exportData.global.priorities?.length || 0} items`);
+  console.log(`Statuses: ${exportData.global.statuses?.length || 0} items`);
+  console.log(`Result Fields: ${exportData.global.resultFields?.length || 0} items`);
+  console.log(`Users: ${exportData.global.users?.length || 0} users`);
+  
+  const totalGlobalItems = (exportData.global.caseFields?.length || 0) +
+                          (exportData.global.caseTypes?.length || 0) +
+                          (exportData.global.priorities?.length || 0) +
+                          (exportData.global.statuses?.length || 0) +
+                          (exportData.global.resultFields?.length || 0) +
+                          (exportData.global.users?.length || 0);
+  
+  console.log(`\nTotal Global Items: ${totalGlobalItems}\n`);
+  
+  // Projects summary
+  console.log('PROJECTS DATA:');
+  console.log('--------------');
+  console.log(`Total Projects: ${exportData.projects.length}`);
+  
+  let totalProjectItems = 0;
+  let totalTestCases = 0;
+  let totalSuites = 0;
+  let totalRuns = 0;
+  let totalSections = 0;
+  let totalMilestones = 0;
+  let totalPlans = 0;
+  
+  // Summary per project
+  exportData.projects.forEach((project, index) => {
+    console.log(`\n${index + 1}. Project: ${project.info.name} (ID: ${project.info.id})`);
+    
+    const casesCount = project.data.cases?.length || 0;
+    const suitesCount = project.data.suites?.length || 0;
+    const sectionsCount = project.data.sections?.length || 0;
+    const runsCount = project.data.runs?.length || 0;
+    const milestonesCount = project.data.milestones?.length || 0;
+    const plansCount = project.data.plans?.length || 0;
+    const configsCount = project.data.configs?.length || 0;
+    const templatesCount = project.data.templates?.length || 0;
+    
+    console.log(`   - Test Cases: ${casesCount}`);
+    console.log(`   - Suites: ${suitesCount}`);
+    console.log(`   - Sections: ${sectionsCount}`);
+    console.log(`   - Runs: ${runsCount}`);
+    console.log(`   - Milestones: ${milestonesCount}`);
+    console.log(`   - Plans: ${plansCount}`);
+    console.log(`   - Configuration Groups: ${configsCount}`);
+    console.log(`   - Templates: ${templatesCount}`);
+    
+    // Count run details
+    let testsCount = 0;
+    let resultsCount = 0;
+    if (project.data.runDetails) {
+      project.data.runDetails.forEach(runDetail => {
+        if (runDetail.tests) testsCount += runDetail.tests.length || 0;
+        if (runDetail.results) resultsCount += runDetail.results.length || 0;
+      });
+    }
+    console.log(`   - Tests: ${testsCount}`);
+    console.log(`   - Results: ${resultsCount}`);
+    
+    const projectTotalItems = casesCount + suitesCount + sectionsCount + runsCount + 
+                             milestonesCount + plansCount + configsCount + templatesCount + 
+                             testsCount + resultsCount;
+    
+    console.log(`   Total Items in Project: ${projectTotalItems}`);
+    
+    // Add to overall totals
+    totalProjectItems += projectTotalItems;
+    totalTestCases += casesCount;
+    totalSuites += suitesCount;
+    totalRuns += runsCount;
+    totalSections += sectionsCount;
+    totalMilestones += milestonesCount;
+    totalPlans += plansCount;
+  });
+  
+  // Grand total
+  console.log('\n==========================================');
+  console.log('GRAND TOTALS:');
+  console.log('-------------');
+  console.log(`Total Projects: ${exportData.projects.length}`);
+  console.log(`Total Test Cases: ${totalTestCases}`);
+  console.log(`Total Suites: ${totalSuites}`);
+  console.log(`Total Sections: ${totalSections}`);
+  console.log(`Total Runs: ${totalRuns}`);
+  console.log(`Total Milestones: ${totalMilestones}`);
+  console.log(`Total Plans: ${totalPlans}`);
+  console.log(`Total Global Items: ${totalGlobalItems}`);
+  console.log(`Total Project Items: ${totalProjectItems}`);
+  console.log(`\nGRAND TOTAL: ${totalGlobalItems + totalProjectItems} items`);
+  console.log('==========================================\n');
+  
+  // Return the report text as a string for potential file saving
+  return {
+    totalProjects: exportData.projects.length,
+    totalGlobalItems,
+    totalProjectItems,
+    grandTotal: totalGlobalItems + totalProjectItems,
+    totalTestCases,
+    totalSuites,
+    totalRuns,
+    totalSections,
+    totalMilestones,
+    totalPlans
+  };
+}
+
+// Run the export
+exportAllTestRailDataToSingleFile().then(exportData => {
+  if (exportData) {
+    // Generate and print the summary report
+    const reportSummary = generateSummaryReport(exportData);
+    
+    // Optionally save the report to a file
+    fs.writeFileSync('./testrail-export-summary.json', JSON.stringify(reportSummary, null, 2), 'utf8');
+    console.log('Summary report saved to: testrail-export-summary.json');
+  }
+}).catch(err => {
+  console.error('Fatal error during export:', err);
+});
