@@ -1,0 +1,188 @@
+const fs = require('fs');
+const path = require('path');
+
+// פונקציה לשמירת נתונים לקבצי JSON בצורה מאורגנת
+function saveStructuredData(exportData, outputDir = './testrail-export-structured') {
+  // יצירת תיקיית הבסיס אם היא לא קיימת
+  if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+  }
+
+  console.log(`\nשומר נתונים בצורה מאורגנת בתיקייה: ${outputDir}`);
+
+  // שמירת מידע גלובלי
+  const globalDir = path.join(outputDir, 'global');
+  if (!fs.existsSync(globalDir)) {
+    fs.mkdirSync(globalDir, { recursive: true });
+  }
+
+  // שמירת כל חלק של המידע הגלובלי בקובץ נפרד
+  fs.writeFileSync(path.join(globalDir, 'case_fields.json'), JSON.stringify(exportData.global.caseFields || [], null, 2));
+  fs.writeFileSync(path.join(globalDir, 'case_types.json'), JSON.stringify(exportData.global.caseTypes || [], null, 2));
+  fs.writeFileSync(path.join(globalDir, 'priorities.json'), JSON.stringify(exportData.global.priorities || [], null, 2));
+  fs.writeFileSync(path.join(globalDir, 'statuses.json'), JSON.stringify(exportData.global.statuses || [], null, 2));
+  fs.writeFileSync(path.join(globalDir, 'result_fields.json'), JSON.stringify(exportData.global.resultFields || [], null, 2));
+  fs.writeFileSync(path.join(globalDir, 'users.json'), JSON.stringify(exportData.global.users || [], null, 2));
+
+  // יצירת קובץ projects.json המכיל רק מידע בסיסי על הפרויקטים
+  const projectsBasicInfo = exportData.projects.map(project => ({
+    id: project.info.id,
+    name: project.info.name,
+    announcement: project.info.announcement,
+    show_announcement: project.info.show_announcement,
+    is_completed: project.info.is_completed,
+    completed_on: project.info.completed_on,
+    suite_mode: project.info.suite_mode,
+    url: project.info.url
+  }));
+  fs.writeFileSync(path.join(outputDir, 'projects.json'), JSON.stringify(projectsBasicInfo, null, 2));
+
+  // שמירת נתונים לכל פרויקט
+  exportData.projects.forEach(project => {
+    if (!project.info || !project.info.id) return;
+
+    const projectName = project.info.name.replace(/[^a-zA-Z0-9]/g, '_');
+    const projectId = project.info.id;
+    const projectDir = path.join(outputDir, 'projects', `${projectName}_${projectId}`);
+    
+    if (!fs.existsSync(projectDir)) {
+      fs.mkdirSync(projectDir, { recursive: true });
+    }
+
+    // שמירת מידע בסיסי על הפרויקט
+    fs.writeFileSync(path.join(projectDir, 'project_info.json'), JSON.stringify(project.info, null, 2));
+    
+    if (!project.data) return;
+    
+    // שמירת נתוני בסיס של הפרויקט
+    const dataItems = [
+      { name: 'suites', data: project.data.suites },
+      { name: 'milestones', data: project.data.milestones },
+      { name: 'plans', data: project.data.plans },
+      { name: 'configs', data: project.data.configs },
+      { name: 'runs', data: project.data.runs },
+      { name: 'sections', data: project.data.sections },
+      { name: 'cases', data: project.data.cases },
+      { name: 'templates', data: project.data.templates }
+    ];
+
+    dataItems.forEach(item => {
+      if (item.data) {
+        fs.writeFileSync(path.join(projectDir, `${item.name}.json`), JSON.stringify(item.data, null, 2));
+      }
+    });
+
+    // שמירת פרטי תכניות (plans) בנפרד
+    if (project.data.planDetails && project.data.planDetails.length > 0) {
+      const plansDir = path.join(projectDir, 'plans_details');
+      if (!fs.existsSync(plansDir)) {
+        fs.mkdirSync(plansDir, { recursive: true });
+      }
+
+      project.data.planDetails.forEach(plan => {
+        if (!plan.id) return;
+        
+        // שמירת מידע בסיסי על התכנית
+        const planBasicInfo = {
+          id: plan.id,
+          details: plan.details,
+          entry_count: plan.entries ? plan.entries.length : 0
+        };
+        fs.writeFileSync(path.join(plansDir, `plan_${plan.id}_info.json`), JSON.stringify(planBasicInfo, null, 2));
+        
+        // שמירת entries בנפרד
+        if (plan.entries && plan.entries.length > 0) {
+          const entriesDir = path.join(plansDir, `plan_${plan.id}_entries`);
+          if (!fs.existsSync(entriesDir)) {
+            fs.mkdirSync(entriesDir, { recursive: true });
+          }
+          
+          plan.entries.forEach(entry => {
+            if (!entry.id) return;
+            
+            // שמירת מידע בסיסי על ה-entry
+            const entryBasicInfo = {
+              id: entry.id,
+              details: entry.details,
+              run_count: entry.runs ? entry.runs.length : 0
+            };
+            fs.writeFileSync(path.join(entriesDir, `entry_${entry.id}_info.json`), JSON.stringify(entryBasicInfo, null, 2));
+            
+            // שמירת ריצות (runs) בנפרד
+            if (entry.runs && entry.runs.length > 0) {
+              const runsDir = path.join(entriesDir, `entry_${entry.id}_runs`);
+              if (!fs.existsSync(runsDir)) {
+                fs.mkdirSync(runsDir, { recursive: true });
+              }
+              
+              entry.runs.forEach(run => {
+                if (!run.id) return;
+                
+                // שמירת מידע בסיסי על הריצה
+                fs.writeFileSync(path.join(runsDir, `run_${run.id}_details.json`), JSON.stringify(run.details, null, 2));
+                
+                // שמירת מבחנים (tests)
+                if (run.tests) {
+                  fs.writeFileSync(path.join(runsDir, `run_${run.id}_tests.json`), JSON.stringify(run.tests, null, 2));
+                }
+                
+                // שמירת ניסיונות (attempts) בנפרד
+                if (run.attempts && run.attempts.length > 0) {
+                  const attemptsDir = path.join(runsDir, `run_${run.id}_attempts`);
+                  if (!fs.existsSync(attemptsDir)) {
+                    fs.mkdirSync(attemptsDir, { recursive: true });
+                  }
+                  
+                  run.attempts.forEach(testAttempt => {
+                    if (!testAttempt.testId) return;
+                    fs.writeFileSync(
+                      path.join(attemptsDir, `test_${testAttempt.testId}_attempts.json`), 
+                      JSON.stringify(testAttempt.attempts, null, 2)
+                    );
+                  });
+                }
+              });
+            }
+          });
+        }
+      });
+    }
+
+    // שמירת פרטי ריצות (runs) בנפרד
+    if (project.data.runDetails && project.data.runDetails.length > 0) {
+      const runsDir = path.join(projectDir, 'runs_details');
+      if (!fs.existsSync(runsDir)) {
+        fs.mkdirSync(runsDir, { recursive: true });
+      }
+
+      project.data.runDetails.forEach(runDetail => {
+        if (!runDetail.id) return;
+        
+        if (runDetail.tests) {
+          fs.writeFileSync(path.join(runsDir, `run_${runDetail.id}_tests.json`), JSON.stringify(runDetail.tests, null, 2));
+        }
+        
+        if (runDetail.results) {
+          fs.writeFileSync(path.join(runsDir, `run_${runDetail.id}_results.json`), JSON.stringify(runDetail.results, null, 2));
+        }
+      });
+    }
+  });
+
+  console.log(`סיום שמירת נתונים מפוצלים. כל הנתונים נשמרו בתיקייה: ${outputDir}`);
+  return outputDir;
+}
+
+// הוספת הקוד הבא בסוף הפונקציה הראשית exportAllTestRailDataToSingleFile
+/*
+  // שמירת כל הנתונים בקובץ JSON אחד
+  const outputPath = './testrail-export-all.json';
+  fs.writeFileSync(outputPath, JSON.stringify(exportData, null, 2), 'utf8');
+  console.log(`Export completed successfully! All data saved to: ${outputPath}`);
+  
+  // שמירת הנתונים בפורמט מפוצל
+  const structuredDir = saveStructuredData(exportData);
+  console.log(`Also saved structured data to: ${structuredDir}`);
+  
+  return exportData; // Return the data for summary reporting
+*/
