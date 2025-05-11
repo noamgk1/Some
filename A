@@ -1,182 +1,96 @@
-const axios = require('axios');
-const fs = require('fs');
-
-class TestRailAPI {
-  constructor(config) {
-    // קונפיגורציה בסיסית
-    this.baseUrl = config.baseUrl.endsWith('/') ? config.baseUrl : `${config.baseUrl}/`;
-    this.apiUrl = `${this.baseUrl}index.php?/api/v2/`;
-    
-    // הגדרות אימות
-    this.auth = {
-      username: config.username,
-      password: config.apiKey // בטסט רייל בד"כ משתמשים ב-API key במקום סיסמה
-    };
-    
-    // הגדרות הבקשה
-    this.axiosConfig = {
-      auth: this.auth,
-      headers: {
-        'Content-Type': 'application/json'
-      }
-    };
-  }
-
-  /**
-   * שליחת בקשה ל-API
-   * @param {string} method - סוג הבקשה (GET/POST)
-   * @param {string} uri - כתובת ה-endpoint
-   * @param {Object} data - מידע לשליחה (אופציונלי)
-   * @returns {Promise} - תוצאת הבקשה
-   */
-  async sendRequest(method, uri, data = null) {
-    const url = `${this.apiUrl}${uri}`;
-    try {
-      let response;
-      
-      if (method.toUpperCase() === 'GET') {
-        response = await axios.get(url, this.axiosConfig);
-      } else if (method.toUpperCase() === 'POST') {
-        response = await axios.post(url, data, this.axiosConfig);
-      } else {
-        throw new Error(`סוג בקשה לא נתמך: ${method}`);
-      }
-      
-      return response.data;
-    } catch (error) {
-      console.error('שגיאה בבקשת API:', error.response?.data || error.message);
-      throw error;
+// manifest.json
+{
+  "manifest_version": 3,
+  "name": "אינדקס רץ לדיבים",
+  "version": "1.0",
+  "description": "מוסיף אינדקס רץ לדיבים עם קלאס bbb בתוך דיב עם קלאס aaa",
+  "permissions": ["scripting"],
+  "host_permissions": ["https://example.com/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://example.com/*"],
+      "js": ["content.js"],
+      "css": ["styles.css"]
     }
-  }
-
-  /**
-   * קבלת כל הפרויקטים
-   * @returns {Promise} - רשימת פרויקטים
-   */
-  async getProjects() {
-    return this.sendRequest('GET', 'get_projects');
-  }
-
-  /**
-   * קבלת כל הסוויטות (מקרי בדיקה) בפרויקט
-   * @param {number} projectId - מזהה הפרויקט
-   * @returns {Promise} - רשימת הסוויטות
-   */
-  async getSuites(projectId) {
-    return this.sendRequest('GET', `get_suites/${projectId}`);
-  }
-
-  /**
-   * קבלת כל מקרי הבדיקה בסוויטה
-   * @param {number} projectId - מזהה הפרויקט
-   * @param {number} suiteId - מזהה הסוויטה
-   * @returns {Promise} - רשימת מקרי הבדיקה
-   */
-  async getCases(projectId, suiteId) {
-    return this.sendRequest('GET', `get_cases/${projectId}&suite_id=${suiteId}`);
-  }
-
-  /**
-   * קבלת כל הריצות (runs) בפרויקט
-   * @param {number} projectId - מזהה הפרויקט
-   * @returns {Promise} - רשימת הריצות
-   */
-  async getRuns(projectId) {
-    return this.sendRequest('GET', `get_runs/${projectId}`);
-  }
-
-  /**
-   * קבלת כל תוצאות הבדיקה בריצה
-   * @param {number} runId - מזהה הריצה
-   * @returns {Promise} - רשימת תוצאות הבדיקה
-   */
-  async getTests(runId) {
-    return this.sendRequest('GET', `get_tests/${runId}`);
-  }
-
-  /**
-   * קבלת כל תוצאות הבדיקה המפורטות למקרה בדיקה ספציפי בריצה
-   * @param {number} runId - מזהה הריצה
-   * @param {number} testId - מזהה הבדיקה
-   * @returns {Promise} - רשימת תוצאות הבדיקה המפורטות
-   */
-  async getResults(runId, testId) {
-    return this.sendRequest('GET', `get_results/${testId}`);
-  }
-
-  /**
-   * קבלת והורדת כל הבדיקות מפרויקט מסוים
-   * @param {number} projectId - מזהה הפרויקט
-   * @param {string} outputPath - נתיב לשמירת הקובץ JSON
-   */
-  async downloadAllTests(projectId, outputPath = './testrail_tests.json') {
-    try {
-      // 1. קבלת כל הסוויטות בפרויקט
-      const suites = await this.getSuites(projectId);
-      console.log(`נמצאו ${suites.length} סוויטות בפרויקט ${projectId}`);
-      
-      const allTestCases = [];
-      
-      // 2. מעבר על כל סוויטה וקבלת מקרי הבדיקה
-      for (const suite of suites) {
-        console.log(`מוריד מקרי בדיקה מסוויטה: ${suite.name} (ID: ${suite.id})`);
-        const cases = await this.getCases(projectId, suite.id);
-        
-        // הוספת מידע על הסוויטה לכל מקרה בדיקה
-        const casesWithSuiteInfo = cases.map(testCase => ({
-          ...testCase,
-          suite_name: suite.name,
-          suite_id: suite.id
-        }));
-        
-        allTestCases.push(...casesWithSuiteInfo);
-      }
-      
-      console.log(`סך הכל הורדו ${allTestCases.length} מקרי בדיקה`);
-      
-      // 3. שמירת המידע לקובץ
-      fs.writeFileSync(outputPath, JSON.stringify(allTestCases, null, 2), 'utf8');
-      console.log(`כל מקרי הבדיקה נשמרו בהצלחה ב: ${outputPath}`);
-      
-      return allTestCases;
-    } catch (error) {
-      console.error('שגיאה בהורדת כל הבדיקות:', error.message);
-      throw error;
-    }
-  }
+  ]
 }
 
-// דוגמת שימוש:
-async function main() {
-  // יצירת אובייקט API עם הגדרות החיבור
-  const testrail = new TestRailAPI({
-    baseUrl: 'http://localhost:8000', // שנה לכתובת השרת המקומי שלך
-    username: 'your_username',        // שם המשתמש שלך
-    apiKey: 'your_api_key'            // ה-API key שלך
-  });
-  
-  try {
-    // קבלת כל הפרויקטים
-    const projects = await testrail.getProjects();
-    console.log('הפרויקטים הזמינים:');
-    projects.forEach(project => {
-      console.log(`- ${project.name} (ID: ${project.id})`);
+// content.js
+(function() {
+  // פונקציה להוספת אינדקסים
+  function addIndexesToBbbDivs() {
+    // מוצא את כל הדיבים עם קלאס aaa
+    const aaaDivs = document.querySelectorAll('.aaa');
+    
+    // עובר על כל דיב aaa
+    aaaDivs.forEach(function(aaaDiv) {
+      // מוצא את כל הדיבים עם קלאס bbb בתוך דיב aaa הנוכחי
+      const bbbDivs = aaaDiv.querySelectorAll('.bbb');
+      
+      // מוסיף אינדקס לכל דיב bbb
+      bbbDivs.forEach(function(bbbDiv, index) {
+        // בודק אם כבר הוספנו אינדקס לדיב זה
+        if (!bbbDiv.querySelector('.index-circle')) {
+          // יוצר אלמנט חדש לאינדקס
+          const indexElement = document.createElement('div');
+          indexElement.className = 'index-circle';
+          indexElement.textContent = index + 1; // אינדקס מתחיל מ-1
+          
+          // מוסיף את האינדקס לתחילת הדיב
+          bbbDiv.insertBefore(indexElement, bbbDiv.firstChild);
+        }
+      });
+    });
+  }
+
+  // פונקציה שתפעל כאשר יש שינויים בדום
+  function observeDOMChanges() {
+    // יצירת אובזרבר שיעקוב אחרי שינויים בדום
+    const observer = new MutationObserver(function(mutations) {
+      addIndexesToBbbDivs();
     });
     
-    // בחירת הפרויקט הראשון לדוגמה
-    if (projects.length > 0) {
-      const projectId = projects[0].id;
-      
-      // הורדת כל מקרי הבדיקה מהפרויקט
-      await testrail.downloadAllTests(projectId, `./project_${projectId}_tests.json`);
-    }
-  } catch (error) {
-    console.error('שגיאה:', error.message);
+    // מתחיל לעקוב אחרי שינויים בדום
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true
+    });
   }
+
+  // הפעלה ראשונית של הוספת האינדקסים
+  addIndexesToBbbDivs();
+  
+  // מפעיל את המעקב אחרי שינויים בדום
+  observeDOMChanges();
+})();
+
+// styles.css
+.index-circle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background-color: #3498db;
+  color: white;
+  font-weight: bold;
+  font-size: 14px;
+  margin-right: 8px;
+  position: absolute;
+  right: auto;
+  left: 10px;
+  top: 10px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  transition: background-color 0.3s ease;
 }
 
-// הפעלת הסקריפט
-main();
+.index-circle:hover {
+  background-color: #2980b9;
+}
 
-// ייצוא הקלאס לשימוש במודולים אחרים
-module.exports = TestRailAPI;
+/* מוודא שלדיב שמכיל את האינדקס יש מיקום יחסי */
+.bbb {
+  position: relative;
+  padding-left: 40px; /* מוסיף מרווח משמאל עבור האינדקס */
+}
