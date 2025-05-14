@@ -1,96 +1,104 @@
-// manifest.json
-{
-  "manifest_version": 3,
-  "name": "אינדקס רץ לדיבים",
-  "version": "1.0",
-  "description": "מוסיף אינדקס רץ לדיבים עם קלאס bbb בתוך דיב עם קלאס aaa",
-  "permissions": ["scripting"],
-  "host_permissions": ["https://example.com/*"],
-  "content_scripts": [
-    {
-      "matches": ["https://example.com/*"],
-      "js": ["content.js"],
-      "css": ["styles.css"]
-    }
-  ]
-}
+#!/usr/bin/env python3
+"""
+CSV Merger Script
 
-// content.js
-(function() {
-  // פונקציה להוספת אינדקסים
-  function addIndexesToBbbDivs() {
-    // מוצא את כל הדיבים עם קלאס aaa
-    const aaaDivs = document.querySelectorAll('.aaa');
+This script takes two CSV file paths as command-line arguments,
+verifies their existence, checks if they have the same columns,
+merges them, and saves the combined result in the current directory.
+"""
+
+import os
+import sys
+import pandas as pd
+import argparse
+from pathlib import Path
+
+
+def validate_file_exists(file_path):
+    """
+    Validates if the specified file exists.
     
-    // עובר על כל דיב aaa
-    aaaDivs.forEach(function(aaaDiv) {
-      // מוצא את כל הדיבים עם קלאס bbb בתוך דיב aaa הנוכחי
-      const bbbDivs = aaaDiv.querySelectorAll('.bbb');
-      
-      // מוסיף אינדקס לכל דיב bbb
-      bbbDivs.forEach(function(bbbDiv, index) {
-        // בודק אם כבר הוספנו אינדקס לדיב זה
-        if (!bbbDiv.querySelector('.index-circle')) {
-          // יוצר אלמנט חדש לאינדקס
-          const indexElement = document.createElement('div');
-          indexElement.className = 'index-circle';
-          indexElement.textContent = index + 1; // אינדקס מתחיל מ-1
-          
-          // מוסיף את האינדקס לתחילת הדיב
-          bbbDiv.insertBefore(indexElement, bbbDiv.firstChild);
-        }
-      });
-    });
-  }
+    Args:
+        file_path (str): Path to the file to validate
+        
+    Returns:
+        bool: True if file exists, otherwise raises FileNotFoundError
+    """
+    if not os.path.isfile(file_path):
+        raise FileNotFoundError(f"File not found: {file_path}")
+    return True
 
-  // פונקציה שתפעל כאשר יש שינויים בדום
-  function observeDOMChanges() {
-    // יצירת אובזרבר שיעקוב אחרי שינויים בדום
-    const observer = new MutationObserver(function(mutations) {
-      addIndexesToBbbDivs();
-    });
+
+def check_columns_match(df1, df2):
+    """
+    Checks if two dataframes have the same columns.
     
-    // מתחיל לעקוב אחרי שינויים בדום
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true
-    });
-  }
+    Args:
+        df1 (pandas.DataFrame): First dataframe
+        df2 (pandas.DataFrame): Second dataframe
+        
+    Returns:
+        bool: True if columns match, otherwise raises ValueError
+    """
+    if sorted(df1.columns.tolist()) != sorted(df2.columns.tolist()):
+        raise ValueError("The CSV files have different columns")
+    return True
 
-  // הפעלה ראשונית של הוספת האינדקסים
-  addIndexesToBbbDivs();
-  
-  // מפעיל את המעקב אחרי שינויים בדום
-  observeDOMChanges();
-})();
 
-// styles.css
-.index-circle {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  background-color: #3498db;
-  color: white;
-  font-weight: bold;
-  font-size: 14px;
-  margin-right: 8px;
-  position: absolute;
-  right: auto;
-  left: 10px;
-  top: 10px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-  transition: background-color 0.3s ease;
-}
+def merge_csv_files(file1_path, file2_path):
+    """
+    Merges two CSV files into one.
+    
+    Args:
+        file1_path (str): Path to the first CSV file
+        file2_path (str): Path to the second CSV file
+        
+    Returns:
+        pandas.DataFrame: Merged dataframe
+    """
+    # Validate files exist
+    validate_file_exists(file1_path)
+    validate_file_exists(file2_path)
+    
+    # Read the CSV files
+    df1 = pd.read_csv(file1_path)
+    df2 = pd.read_csv(file2_path)
+    
+    # Check if columns match
+    check_columns_match(df1, df2)
+    
+    # Concatenate the dataframes
+    merged_df = pd.concat([df1, df2], ignore_index=True)
+    
+    return merged_df
 
-.index-circle:hover {
-  background-color: #2980b9;
-}
 
-/* מוודא שלדיב שמכיל את האינדקס יש מיקום יחסי */
-.bbb {
-  position: relative;
-  padding-left: 40px; /* מוסיף מרווח משמאל עבור האינדקס */
-}
+def main():
+    """
+    Main function to process command-line arguments and execute the CSV merging.
+    """
+    parser = argparse.ArgumentParser(description='Merge two CSV files with identical columns.')
+    parser.add_argument('file1', help='Path to the first CSV file')
+    parser.add_argument('file2', help='Path to the second CSV file')
+    parser.add_argument('-o', '--output', help='Output filename (default: merged_output.csv)', 
+                       default='merged_output.csv')
+    
+    args = parser.parse_args()
+    
+    try:
+        # Merge the CSV files
+        merged_df = merge_csv_files(args.file1, args.file2)
+        
+        # Save the merged dataframe to the current directory
+        output_path = Path(args.output)
+        merged_df.to_csv(output_path, index=False)
+        
+        print(f"Successfully merged CSV files. Output saved to: {output_path.absolute()}")
+        
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
