@@ -5,11 +5,12 @@ CSV Merger Script
 This script takes two CSV file paths as command-line arguments,
 verifies their existence, checks if they have the same columns,
 merges them, and saves the combined result in the current directory.
+This version uses only standard Python libraries (no pandas).
 """
 
 import os
 import sys
-import pandas as pd
+import csv
 import argparse
 from pathlib import Path
 
@@ -29,48 +30,93 @@ def validate_file_exists(file_path):
     return True
 
 
-def check_columns_match(df1, df2):
+def get_csv_columns(file_path):
     """
-    Checks if two dataframes have the same columns.
+    Reads the header row from a CSV file to determine its columns.
     
     Args:
-        df1 (pandas.DataFrame): First dataframe
-        df2 (pandas.DataFrame): Second dataframe
+        file_path (str): Path to the CSV file
         
     Returns:
-        bool: True if columns match, otherwise raises ValueError
+        list: Column names from the CSV file
     """
-    if sorted(df1.columns.tolist()) != sorted(df2.columns.tolist()):
-        raise ValueError("The CSV files have different columns")
-    return True
+    with open(file_path, 'r', newline='', encoding='utf-8') as csv_file:
+        csv_reader = csv.reader(csv_file)
+        try:
+            # Get the header row (first row)
+            header = next(csv_reader)
+            return header
+        except StopIteration:
+            raise ValueError(f"CSV file {file_path} is empty")
 
 
-def merge_csv_files(file1_path, file2_path):
+def check_columns_match(file1_path, file2_path):
     """
-    Merges two CSV files into one.
+    Checks if two CSV files have the same columns.
     
     Args:
         file1_path (str): Path to the first CSV file
         file2_path (str): Path to the second CSV file
         
     Returns:
-        pandas.DataFrame: Merged dataframe
+        bool: True if columns match, otherwise raises ValueError
+    """
+    header1 = get_csv_columns(file1_path)
+    header2 = get_csv_columns(file2_path)
+    
+    if sorted(header1) != sorted(header2):
+        raise ValueError("The CSV files have different columns")
+    
+    # Return the original order of columns from the first file
+    return header1
+
+
+def merge_csv_files(file1_path, file2_path, output_path):
+    """
+    Merges two CSV files into one.
+    
+    Args:
+        file1_path (str): Path to the first CSV file
+        file2_path (str): Path to the second CSV file
+        output_path (str): Path where to save the merged file
+        
+    Returns:
+        int: Number of rows written to the output file
     """
     # Validate files exist
     validate_file_exists(file1_path)
     validate_file_exists(file2_path)
     
-    # Read the CSV files
-    df1 = pd.read_csv(file1_path)
-    df2 = pd.read_csv(file2_path)
+    # Check if columns match and get column headers
+    columns = check_columns_match(file1_path, file2_path)
     
-    # Check if columns match
-    check_columns_match(df1, df2)
+    # Create the output file
+    with open(output_path, 'w', newline='', encoding='utf-8') as output_file:
+        writer = csv.writer(output_file)
+        
+        # Write header row
+        writer.writerow(columns)
+        
+        # Counter for total rows written
+        rows_written = 1  # 1 for the header
+        
+        # Process first file (skip header)
+        with open(file1_path, 'r', newline='', encoding='utf-8') as csv_file:
+            reader = csv.reader(csv_file)
+            next(reader)  # Skip header
+            for row in reader:
+                writer.writerow(row)
+                rows_written += 1
+        
+        # Process second file (skip header)
+        with open(file2_path, 'r', newline='', encoding='utf-8') as csv_file:
+            reader = csv.reader(csv_file)
+            next(reader)  # Skip header
+            for row in reader:
+                writer.writerow(row)
+                rows_written += 1
     
-    # Concatenate the dataframes
-    merged_df = pd.concat([df1, df2], ignore_index=True)
-    
-    return merged_df
+    return rows_written - 1  # Subtract 1 to exclude header row
 
 
 def main():
@@ -87,13 +133,10 @@ def main():
     
     try:
         # Merge the CSV files
-        merged_df = merge_csv_files(args.file1, args.file2)
+        rows_merged = merge_csv_files(args.file1, args.file2, args.output)
         
-        # Save the merged dataframe to the current directory
         output_path = Path(args.output)
-        merged_df.to_csv(output_path, index=False)
-        
-        print(f"Successfully merged CSV files. Output saved to: {output_path.absolute()}")
+        print(f"Successfully merged CSV files. {rows_merged} data rows written to: {output_path.absolute()}")
         
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
