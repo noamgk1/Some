@@ -1,147 +1,112 @@
 #!/usr/bin/env python3
 """
-CSV Merger Script
-
-This script takes two CSV file paths as command-line arguments,
-verifies their existence, checks if they have the same columns,
-merges them, and saves the combined result in the current directory.
-This version uses only standard Python libraries (no pandas).
+Module for running multiple shell commands concurrently and streaming their output in real-time.
 """
 
-import os
+import subprocess
+import threading
 import sys
-import csv
-import argparse
-from pathlib import Path
+import time
 
 
-def validate_file_exists(file_path):
+def run_commands_concurrently(commands_list):
     """
-    Validates if the specified file exists.
+    Runs a list of commands concurrently and displays their output in real time
     
     Args:
-        file_path (str): Path to the file to validate
-        
-    Returns:
-        bool: True if file exists, otherwise raises FileNotFoundError
+        commands_list: List of strings, each representing a shell command to run
     """
-    if not os.path.isfile(file_path):
-        raise FileNotFoundError(f"File not found: {file_path}")
-    return True
-
-
-def get_csv_columns(file_path):
-    """
-    Reads the header row from a CSV file to determine its columns.
+    # Lock for synchronized console printing
+    print_lock = threading.Lock()
     
-    Args:
-        file_path (str): Path to the CSV file
+    # List to track all threads
+    threads = []
+    
+    def run_command_and_stream_output(command, command_index):
+        """
+        Runs a single command and streams its output in real time
         
-    Returns:
-        list: Column names from the CSV file
-    """
-    with open(file_path, 'r', newline='', encoding='utf-8') as csv_file:
-        csv_reader = csv.reader(csv_file)
-        try:
-            # Get the header row (first row)
-            header = next(csv_reader)
-            return header
-        except StopIteration:
-            raise ValueError(f"CSV file {file_path} is empty")
+        Args:
+            command: String representing a shell command
+            command_index: Index/identifier of the command for display
+        """
+        prefix = f"Command[{command_index}]"
+        
+        # Run the command with pipes for stdout and stderr
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            shell=True,
+            bufsize=1  # Line buffering - for real-time output
+        )
+        
+        def stream_output(stream, stream_name):
+            """
+            Reads from a stream and prints each line with the appropriate prefix
+            
+            Args:
+                stream: Stream to read from (stdout or stderr)
+                stream_name: Name of the stream for display
+            """
+            for line in stream:
+                line = line.rstrip('\n')
+                with print_lock:
+                    print(f"{prefix} {stream_name}: {line}")
+                    sys.stdout.flush()
+        
+        # Create separate threads for stdout and stderr
+        stdout_thread = threading.Thread(
+            target=stream_output, 
+            args=(process.stdout, "stdout")
+        )
+        stderr_thread = threading.Thread(
+            target=stream_output, 
+            args=(process.stderr, "stderr")
+        )
+        
+        # Set threads as daemon so they exit when the main program exits
+        stdout_thread.daemon = True
+        stderr_thread.daemon = True
+        
+        # Start the output reading threads
+        stdout_thread.start()
+        stderr_thread.start()
+        
+        # Wait for the process to complete
+        return_code = process.wait()
+        
+        # Wait for output threads to finish reading
+        stdout_thread.join()
+        stderr_thread.join()
+        
+        with print_lock:
+            print(f"{prefix} completed with return code: {return_code}")
+    
+    # Create and start a thread for each command
+    for i, command in enumerate(commands_list):
+        thread = threading.Thread(
+            target=run_command_and_stream_output, 
+            args=(command, i)
+        )
+        threads.append(thread)
+        thread.start()
+    
+    # Wait for all command threads to complete
+    for thread in threads:
+        thread.join()
+    
+    print("All commands have completed execution")
 
 
-def check_columns_match(file1_path, file2_path):
-    """
-    Checks if two CSV files have the same columns.
-    
-    Args:
-        file1_path (str): Path to the first CSV file
-        file2_path (str): Path to the second CSV file
-        
-    Returns:
-        bool: True if columns match, otherwise raises ValueError
-    """
-    header1 = get_csv_columns(file1_path)
-    header2 = get_csv_columns(file2_path)
-    
-    if sorted(header1) != sorted(header2):
-        raise ValueError("The CSV files have different columns")
-    
-    # Return the original order of columns from the first file
-    return header1
-
-
-def merge_csv_files(file1_path, file2_path, output_path):
-    """
-    Merges two CSV files into one.
-    
-    Args:
-        file1_path (str): Path to the first CSV file
-        file2_path (str): Path to the second CSV file
-        output_path (str): Path where to save the merged file
-        
-    Returns:
-        int: Number of rows written to the output file
-    """
-    # Validate files exist
-    validate_file_exists(file1_path)
-    validate_file_exists(file2_path)
-    
-    # Check if columns match and get column headers
-    columns = check_columns_match(file1_path, file2_path)
-    
-    # Create the output file
-    with open(output_path, 'w', newline='', encoding='utf-8') as output_file:
-        writer = csv.writer(output_file)
-        
-        # Write header row
-        writer.writerow(columns)
-        
-        # Counter for total rows written
-        rows_written = 1  # 1 for the header
-        
-        # Process first file (skip header)
-        with open(file1_path, 'r', newline='', encoding='utf-8') as csv_file:
-            reader = csv.reader(csv_file)
-            next(reader)  # Skip header
-            for row in reader:
-                writer.writerow(row)
-                rows_written += 1
-        
-        # Process second file (skip header)
-        with open(file2_path, 'r', newline='', encoding='utf-8') as csv_file:
-            reader = csv.reader(csv_file)
-            next(reader)  # Skip header
-            for row in reader:
-                writer.writerow(row)
-                rows_written += 1
-    
-    return rows_written - 1  # Subtract 1 to exclude header row
-
-
-def main():
-    """
-    Main function to process command-line arguments and execute the CSV merging.
-    """
-    parser = argparse.ArgumentParser(description='Merge two CSV files with identical columns.')
-    parser.add_argument('file1', help='Path to the first CSV file')
-    parser.add_argument('file2', help='Path to the second CSV file')
-    parser.add_argument('-o', '--output', help='Output filename (default: merged_output.csv)', 
-                       default='merged_output.csv')
-    
-    args = parser.parse_args()
-    
-    try:
-        # Merge the CSV files
-        rows_merged = merge_csv_files(args.file1, args.file2, args.output)
-        
-        output_path = Path(args.output)
-        print(f"Successfully merged CSV files. {rows_merged} data rows written to: {output_path.absolute()}")
-        
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
-
-
+# Example usage
 if __name__ == "__main__":
-    main()
+    commands = [
+        "ls -la",
+        "ping -c 5 google.com",
+        "echo 'Starting sleep' && sleep 3 && echo 'Finished sleep'",
+        "find /usr -name 'python*' -type f 2>/dev/null | head -n 5"
+    ]
+    
+    run_commands_concurrently(commands)
