@@ -96,8 +96,370 @@ class JiraIssueManager:
         except Exception as e:
             print(f"שגיאה: {str(e)}")
             return []
+
+    def get_create_issue_metadata(self, project_key: str, issue_type: str = None) -> Dict:
+        """
+        קבלת מטא-דאטה לשדות יצירת Issue - כולל שדות חובה ואופציונליים
+        
+        Args:
+            project_key (str): מפתח הפרויקט
+            issue_type (str): סוג הIssue (אופציונלי)
+            
+        Returns:
+            Dict: מטא-דאטה של שדות יצירת Issue
+        """
+        params = {
+            'projectKeys': project_key,
+            'expand': 'projects.issuetypes.fields'
+        }
+        
+        if issue_type:
+            params['issuetypeNames'] = issue_type
+            
+        try:
+            response = requests.get(
+                f"{self.api_url}/issue/createmeta",
+                headers=self.headers,
+                params=params
+            )
+            
+            if response.status_code == 200:
+                return response.json()
+            else:
+                print(f"שגיאה בקבלת מטא-דאטה: {response.status_code}")
+                return {}
+                
+        except Exception as e:
+            print(f"שגיאה: {str(e)}")
+            return {}
+
+    def get_fields_for_issue_type(self, project_key: str, issue_type: str) -> Dict:
+        """
+        קבלת שדות ספציפיים לסוג Issue מסוים
+        
+        Args:
+            project_key (str): מפתח הפרויקט
+            issue_type (str): סוג הIssue
+            
+        Returns:
+            Dict: מידע על שדות הIssue כולל חובה/אופציונלי
+        """
+        metadata = self.get_create_issue_metadata(project_key, issue_type)
+        
+        if not metadata or 'projects' not in metadata:
+            return {}
+            
+        try:
+            project = metadata['projects'][0]
+            for issuetype in project['issuetypes']:
+                if issuetype['name'] == issue_type:
+                    return issuetype['fields']
+            return {}
+        except (IndexError, KeyError) as e:
+            print(f"שגיאה בעיבוד מטא-דאטה: {str(e)}")
+            return {}
+
+    def print_available_fields(self, project_key: str, issue_type: str = None):
+        """
+        הדפסת רשימת השדות הזמינים בפורמט ברור
+        
+        Args:
+            project_key (str): מפתח הפרויקט
+            issue_type (str): סוג הIssue (אופציונלי)
+        """
+        if issue_type:
+            fields = self.get_fields_for_issue_type(project_key, issue_type)
+            if fields:
+                print(f"\n🔍 שדות זמינים עבור {issue_type} בפרויקט {project_key}:")
+                print("=" * 60)
+                
+                required_fields = []
+                optional_fields = []
+                
+                for field_id, field_info in fields.items():
+                    field_name = field_info.get('name', field_id)
+                    field_type = field_info.get('schema', {}).get('type', 'unknown')
+                    is_required = field_info.get('required', False)
+                    
+                    field_desc = f"🔹 {field_name} ({field_id}) - סוג: {field_type}"
+                    
+                    if 'allowedValues' in field_info and field_info['allowedValues']:
+                        values = [v.get('name', v.get('value', str(v))) for v in field_info['allowedValues']]
+                        field_desc += f" - ערכים: {', '.join(values[:5])}"
+                        if len(values) > 5:
+                            field_desc += f" ועוד {len(values) - 5}..."
+                    
+                    if is_required:
+                        required_fields.append(field_desc)
+                    else:
+                        optional_fields.append(field_desc)
+                
+                if required_fields:
+                    print("\n🚨 שדות חובה:")
+                    for field in required_fields:
+                        print(f"  {field}")
+                
+                if optional_fields:
+                    print("\n✨ שדות אופציונליים:")
+                    for field in optional_fields:
+                        print(f"  {field}")
+            else:
+                print(f"לא נמצאו שדות עבור {issue_type} בפרויקט {project_key}")
+        else:
+            metadata = self.get_create_issue_metadata(project_key)
+            if metadata and 'projects' in metadata:
+                project = metadata['projects'][0]
+                print(f"\n🔍 סוגי Issues זמינים בפרויקט {project_key}:")
+                print("=" * 50)
+                
+                for issuetype in project['issuetypes']:
+                    print(f"🔸 {issuetype['name']} - {issuetype.get('description', 'ללא תיאור')}")
+                
+                print(f"\n💡 השתמש ב-print_available_fields('{project_key}', 'סוג_Issue') לראות שדות ספציפיים")
+
+    def get_field_suggestions(self, project_key: str, issue_type: str) -> Dict:
+        """
+        קבלת הצעות לערכים בשדות (לדוגמה: רשימת משתמשים, components וכו')
+        
+        Args:
+            project_key (str): מפתח הפרויקט
+            issue_type (str): סוג הIssue
+            
+        Returns:
+            Dict: הצעות לערכים בשדות שונים
+        """
+        suggestions = {}
+        
+        try:
+            # קבלת משתמשים שניתן להקצות
+            assignable_users = self.get_assignable_users(project_key)
+            if assignable_users:
+                suggestions['assignee'] = [
+                    {
+                        'name': user.get('name', user.get('accountId')),
+                        'displayName': user.get('displayName'),
+                        'emailAddress': user.get('emailAddress')
+                    }
+                    for user in assignable_users
+                ]
+            
+            # קבלת components
+            components = self.get_project_components(project_key)
+            if components:
+                suggestions['components'] = [
+                    {'name': comp['name'], 'description': comp.get('description', '')}
+                    for comp in components
+                ]
+            
+            # קבלת versions
+            versions = self.get_project_versions(project_key)
+            if versions:
+                suggestions['versions'] = [
+                    {'name': ver['name'], 'released': ver.get('released', False)}
+                    for ver in versions
+                ]
+            
+            return suggestions
+            
+        except Exception as e:
+            print(f"שגיאה בקבלת הצעות: {str(e)}")
+            return {}
+
+    def get_assignable_users(self, project_key: str) -> List[Dict]:
+        """
+        קבלת רשימת משתמשים שניתן להקצות בפרויקט
+        """
+        try:
+            response = requests.get(
+                f"{self.api_url}/user/assignable/search",
+                headers=self.headers,
+                params={'project': project_key}
+            )
+            
+            if response.status_code == 200:
+                return response.json()
+            return []
+        except Exception as e:
+            print(f"שגיאה בקבלת משתמשים: {str(e)}")
+            return []
+
+    def get_project_components(self, project_key: str) -> List[Dict]:
+        """
+        קבלת components של הפרויקט
+        """
+        try:
+            response = requests.get(
+                f"{self.api_url}/project/{project_key}/components",
+                headers=self.headers
+            )
+            
+            if response.status_code == 200:
+                return response.json()
+            return []
+        except Exception as e:
+            print(f"שגיאה בקבלת components: {str(e)}")
+            return []
+
+    def get_project_versions(self, project_key: str) -> List[Dict]:
+        """
+        קבלת versions של הפרויקט
+        """
+        try:
+            response = requests.get(
+                f"{self.api_url}/project/{project_key}/versions",
+                headers=self.headers
+            )
+            
+            if response.status_code == 200:
+                return response.json()
+            return []
+        except Exception as e:
+            print(f"שגיאה בקבלת versions: {str(e)}")
+            return []
     
-    def create_issue(self, project_key: str, summary: str, description: str = "",
+    def create_issue_interactive(self, project_key: str, issue_type: str = None) -> Optional[Dict]:
+        """
+        יצירת Issue בצורה אינטראקטיבית עם הנחיה לשדות
+        
+        Args:
+            project_key (str): מפתח הפרויקט
+            issue_type (str): סוג הIssue (אופציונלי)
+            
+        Returns:
+            Optional[Dict]: מידע על הIssue שנוצר
+        """
+        if not issue_type:
+            print("סוגי Issues זמינים:")
+            self.print_available_fields(project_key)
+            return None
+            
+        fields = self.get_fields_for_issue_type(project_key, issue_type)
+        if not fields:
+            print(f"לא נמצאו שדות עבור {issue_type}")
+            return None
+            
+        print(f"\n🔧 יצירת Issue חדש מסוג {issue_type}")
+        print("=" * 40)
+        
+        # בניית נתוני הIssue
+        issue_fields = {
+            "project": {"key": project_key},
+            "issuetype": {"name": issue_type}
+        }
+        
+        # השדות הבסיסיים הנדרשים
+        for field_id, field_info in fields.items():
+            if not field_info.get('required', False):
+                continue
+                
+            field_name = field_info.get('name', field_id)
+            field_type = field_info.get('schema', {}).get('type')
+            
+            # דילוג על שדות שכבר מוגדרים
+            if field_id in ['project', 'issuetype']:
+                continue
+                
+            print(f"\n📝 {field_name} (חובה):")
+            
+            if field_id == 'summary':
+                value = input("  הזן כותרת: ")
+                issue_fields['summary'] = value
+                
+            elif field_id == 'description':
+                value = input("  הזן תיאור: ")
+                if value:
+                    issue_fields['description'] = {
+                        "type": "doc",
+                        "version": 1,
+                        "content": [{
+                            "type": "paragraph",
+                            "content": [{
+                                "type": "text",
+                                "text": value
+                            }]
+                        }]
+                    }
+                    
+            elif 'allowedValues' in field_info and field_info['allowedValues']:
+                print("  ערכים זמינים:")
+                for i, option in enumerate(field_info['allowedValues']):
+                    name = option.get('name', option.get('value', str(option)))
+                    print(f"    {i+1}. {name}")
+                
+                try:
+                    choice = int(input("  בחר מספר: ")) - 1
+                    if 0 <= choice < len(field_info['allowedValues']):
+                        selected = field_info['allowedValues'][choice]
+                        issue_fields[field_id] = {"id": selected['id']} if 'id' in selected else {"name": selected['name']}
+                except ValueError:
+                    print("  מספר לא תקין, מדלג על השדה")
+                    
+            else:
+                value = input(f"  הזן ערך עבור {field_name}: ")
+                if value:
+                    issue_fields[field_id] = value
+        
+        # יצירת הIssue
+        try:
+            response = requests.post(
+                f"{self.api_url}/issue",
+                headers=self.headers,
+                data=json.dumps({"fields": issue_fields})
+            )
+            
+            if response.status_code == 201:
+                created_issue = response.json()
+                print(f"\n✅ Issue נוצר בהצלחה: {created_issue['key']}")
+                return created_issue
+            else:
+                print(f"\n❌ שגיאה ביצירת Issue: {response.status_code}")
+                print(f"פרטים: {response.text}")
+                return None
+                
+        except Exception as e:
+            print(f"שגיאה ביצירת Issue: {str(e)}")
+            return None
+
+    def validate_field_value(self, project_key: str, issue_type: str, field_id: str, value: Any) -> bool:
+        """
+        בדיקת תקינות ערך שדה לפני יצירת Issue
+        
+        Args:
+            project_key (str): מפתח הפרויקט
+            issue_type (str): סוג הIssue
+            field_id (str): מזהה השדה
+            value (Any): הערך לבדיקה
+            
+        Returns:
+            bool: True אם הערך תקין, False אחרת
+        """
+        fields = self.get_fields_for_issue_type(project_key, issue_type)
+        
+        if field_id not in fields:
+            print(f"שדה {field_id} לא קיים")
+            return False
+            
+        field_info = fields[field_id]
+        
+        # בדיקה אם השדה חובה וריק
+        if field_info.get('required', False) and not value:
+            print(f"שדה {field_info.get('name', field_id)} הוא חובה")
+            return False
+            
+        # בדיקה אם הערך מתוך הרשימה המותרת
+        if 'allowedValues' in field_info and field_info['allowedValues']:
+            allowed_names = [v.get('name', v.get('value', str(v))) for v in field_info['allowedValues']]
+            if isinstance(value, dict) and 'name' in value:
+                if value['name'] not in allowed_names:
+                    print(f"ערך {value['name']} לא מותר עבור {field_info.get('name', field_id)}")
+                    print(f"ערכים מותרים: {', '.join(allowed_names)}")
+                    return False
+            elif isinstance(value, str) and value not in allowed_names:
+                print(f"ערך {value} לא מותר עבור {field_info.get('name', field_id)}")
+                print(f"ערכים מותרים: {', '.join(allowed_names)}")
+                return False
+                
+        return True
                     issue_type: str = "Task", priority: str = "Medium",
                     assignee: str = None, labels: List[str] = None,
                     custom_fields: Dict[str, Any] = None) -> Optional[Dict]:
