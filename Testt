@@ -1,0 +1,192 @@
+#!/usr/bin/env python3
+"""
+Restore original file names from an iOS/iTunes backup using Manifest.db.
+
+Given:
+  - A backup root directory (containing Manifest.db and hashed files in subdirs)
+  - Or a separate path to Manifest.db and to the hashed files root
+
+This script uses Manifest.db -> Files(fileID, domain, relativePath) to copy (or move)
+each hashed file (./<first2>/<fileID>) to ./OUTPUT/<domain>/<relativePath>.
+
+Usage examples:
+  python restore_ios_backup.py /path/to/BackupDir --out /path/to/output
+  python restore_ios_backup.py /path/to/BackupDir --move
+  python restore_ios_backup.py --db /path/Manifest.db --files-root /path/BackupDir --out ./restored
+
+Tested with modern backup schemas (iOS 10+). It will skip entries with no matching file on disk.
+"""
+
+import argparse
+import os
+import sqlite3
+import sys
+from pathlib import Path
+import shutil
+
+def parse_args():
+    p = argparse.ArgumentParser(description="Rename iOS backup hashed files using Manifest.db")
+    p.add_argument("backup_dir", nargs="?", help="Path to the iOS backup directory (contains Manifest.db and hashed files)")
+    p.add_argument("--db", help="Path to Manifest.db (use if not in backup_dir)")
+    p.add_argument("--files-root", help="Path to the hashed files root (default: backup_dir)")
+    p.add_argument("--out", default="restored_backup", help="Output directory to reconstruct original tree")
+    p.add_argument("--move", action="store_true", help="Move files instead of copying")
+    p.add_argument("--dry-run", action="store_true", help="Show what would be done, don’t copy/move")
+    p.add_argument("--limit", type=int, default=0, help="Process only the first N files (debug)")
+    return p.parse_args()
+
+def find_manifest_db(backup_dir: Path, override: str | None) -> Path:
+    if override:
+        db = Path(override)
+        if not db.is_file():
+            sys.exit(f"ERROR: Manifest.db not found at: {db}")
+        return db
+    if not backup_dir:
+        sys.exit("ERROR: Provide backup_dir or --db/--files-root.")
+    db = Path(backup_dir) / "Manifest.db"
+    if not db.is_file():
+        # Some tools export lowercase or in a sibling; try a couple variants
+        candidates = [Path(backup_dir) / "manifest.db", Path(backup_dir).parent / "Manifest.db"]
+        for c in candidates:
+            if c.is_file():
+                return c
+        sys.exit(f"ERROR: Manifest.db not found in {backup_dir}")
+    return db
+
+def find_files_root(backup_dir: Path | None, override: str | None) -> Path:
+    if override:
+        root = Path(override)
+        if not root.is_dir():
+            sys.exit(f"ERROR: files root not found: {root}")
+        return root
+    if not backup_dir:
+        sys.exit("ERROR: Provide backup_dir or --files-root.")
+    return Path(backup_dir)
+
+def sanitize_component(name: str) -> str:
+    """
+    Make a safe path component for common OSes without changing semantics too much.
+    """
+    # Remove NULLs and normalize path separators
+    name = name.replace("\x00", "")
+    # Avoid accidental absolute paths or parent traversal:
+    name = name.replace("\\", "/")
+    parts = [p for p in name.split("/") if p not in ("", ".", "..")]
+    safe = "/".join(parts)
+
+    # Replace characters that are illegal on Windows (keeps macOS/Linux happy too)
+    illegal = '<>:"|?*'
+    for ch in illegal:
+        safe = safe.replace(ch, "_")
+    return safe
+
+def ensure_unique_path(dst: Path) -> Path:
+    if not dst.exists():
+        return dst
+    stem = dst.stem
+    suffix = dst.suffix
+    parent = dst.parent
+    i = 1
+    while True:
+        cand = parent / f"{stem}__dup{i}{suffix}"
+        if not cand.exists():
+            return cand
+        i += 1
+
+def main():
+    args = parse_args()
+    backup_dir = Path(args.backup_dir) if args.backup_dir else None
+    manifest_db = find_manifest_db(backup_dir, args.db)
+    files_root = find_files_root(backup_dir, args.files_root)
+    out_root = Path(args.out)
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    # Open DB
+    conn = sqlite3.connect(manifest_db)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+
+    # Try modern schema first (Files table)
+    query = """
+        SELECT fileID, domain, relativePath
+        FROM Files
+        WHERE relativePath IS NOT NULL
+    """
+    # Some old backups use different casing or columns; we can detect presence
+    try:
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = {r[0].lower() for r in cur.fetchall()}
+        if "files" not in tables:
+            sys.exit("ERROR: 'Files' table not found in Manifest.db. This looks like an older schema not supported by this script.")
+        cur.execute(query)
+    except sqlite3.DatabaseError as e:
+        sys.exit(f"ERROR reading Manifest.db: {e}")
+
+    total = 0
+    copied = 0
+    missing = 0
+    skipped = 0
+    errors = 0
+
+    print(f"Manifest: {manifest_db}")
+    print(f"Files root: {files_root}")
+    print(f"Output: {out_root}")
+    print(f"Mode: {'MOVE' if args.move else 'COPY'} {'(dry-run)' if args.dry_run else ''}")
+    print("Starting...")
+
+    for row in cur:
+        file_id = row["fileID"]
+        domain = row["domain"] or "UnknownDomain"
+        rel = row["relativePath"] or ""
+        total += 1
+        if args.limit and total > args.limit:
+            break
+
+        # Location of the hashed file: <files_root>/<first two hex>/<fileID>
+        subdir = file_id[:2]
+        src = files_root / subdir / file_id
+        if not src.is_file():
+            # Some tools flatten everything; try direct
+            alt = files_root / file_id
+            if alt.is_file():
+                src = alt
+            else:
+                missing += 1
+                continue
+
+        # Build destination path
+        safe_domain = sanitize_component(domain)
+        safe_rel = sanitize_component(rel)
+        dst = out_root / safe_domain / safe_rel
+
+        # Ensure parent dir exists
+        dst.parent.mkdir(parents=True, exist_ok=True)
+
+        # Handle collisions: exact same path already exists with different content
+        final_dst = ensure_unique_path(dst) if dst.exists() else dst
+
+        try:
+            action = "MOVE" if args.move else "COPY"
+            if args.dry_run:
+                print(f"{action}: {src}  ->  {final_dst}")
+                copied += 1
+                continue
+            if args.move:
+                shutil.move(str(src), str(final_dst))
+            else:
+                # Copy without metadata (Apple metadata may be weird outside backup)
+                shutil.copyfile(str(src), str(final_dst))
+            copied += 1
+        except Exception as e:
+            errors += 1
+            print(f"ERROR processing {file_id} -> {final_dst}: {e}", file=sys.stderr)
+
+    print("\nDone.")
+    print(f"Total DB entries seen: {total}")
+    print(f"Copied/Moved:          {copied}")
+    print(f"Missing on disk:       {missing}")
+    print(f"Errors:                {errors}")
+    print(f"Output directory:      {out_root.resolve()}")
+
+if __name__ == "__main__":
+    main()
